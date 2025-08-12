@@ -3,11 +3,19 @@ import threading
 from ctypes import *
 import time
 from typing import List, Dict
+from pathlib import PurePath, Path
 
 from pendulum import DateTime, parse
 
+# Determine the directory where the current Python script resides
+current_dir = Path(__file__).resolve().parent.parent
+
+# Build path to the shared library relative to the script
+# Adjust folder names to match your project structure
+so_path = PurePath(current_dir, "cpp", "build", "libexecutor.so")
+
 # Load the shared library
-lib = CDLL('/home/subham/Desktop/test/PythonCache/cpp/cmake-build-debug/libexecutor.so')
+lib = CDLL(str(so_path))
 
 def convert_str_to_datetime(date_str: str) -> DateTime:
     return parse(date_str)
@@ -94,37 +102,72 @@ class SymbolCacheContainer:
 def market_depth_consumer():
     while True:
         for symbol_cache in SymbolCacheContainer.symbol_to_symbol_cache_dict.values():
+            print("\n=== Market Depth Cache ===")
+            print("--- BID ---")
             for md in symbol_cache.bid_market_depth:
-                print(f'symbol: {md.symbol}, depth: {md.position}')
+                if md.symbol:  # only print populated entries
+                    print(f"{md.symbol} | Pos: {md.position} | Side: BID | Price: {md.px} | Qty: {md.qty} "
+                          f"| Maker: {md.market_maker} | SmartDepth: {md.is_smart_depth} "
+                          f"| CumNot: {md.cumulative_notional} | CumQty: {md.cumulative_qty} "
+                          f"| CumAvgPx: {md.cumulative_avg_px}")
+            print("--- ASK ---")
             for md in symbol_cache.ask_market_depth:
-                print(f'symbol: {md.symbol} depth: {md.position}')
+                if md.symbol:
+                    print(f"{md.symbol} | Pos: {md.position} | Side: ASK | Price: {md.px} | Qty: {md.qty} "
+                          f"| Maker: {md.market_maker} | SmartDepth: {md.is_smart_depth} "
+                          f"| CumNot: {md.cumulative_notional} | CumQty: {md.cumulative_qty} "
+                          f"| CumAvgPx: {md.cumulative_avg_px}")
+        time.sleep(5)  # slow down output
+
 
 def market_depth_callback(mes_p):
     try:
         md = mes_p[0]
-        print(mes_p)
-        symbol_cache: SymbolCache = SymbolCacheContainer.get_symbol_cache(md.symbol_.decode())
-        mkt_depths: List[
-            ExtendedMarketDepth] = symbol_cache.bid_market_depth if 'B' == md.side_.decode() else symbol_cache.ask_market_depth
-        mkt_depth: ExtendedMarketDepth = mkt_depths[md.position_]
-        try:
-            mkt_depth.symbol = md.symbol_.decode()
-            mkt_depth.arrival_time = convert_str_to_datetime(md.arrival_time_.decode())
-            mkt_depth.exch_time = convert_str_to_datetime(md.exch_time_.decode())
-            mkt_depth.side = TickType.BID if md.side_.decode() == 'B' else TickType.ASK
-            mkt_depth.px = md.px_ if md.is_px_set_ else 0.0
-            mkt_depth.qty = md.qty_ if md.is_qty_set_ else 0
-            mkt_depth.position = md.position_
-            mkt_depth.market_maker = md.market_maker_.decode() if md.market_maker_ else ''
-            mkt_depth.is_smart_depth = md.is_smart_depth_ if md.is_is_smart_depth_set_ else False
-            mkt_depth.cumulative_notional = md.cumulative_notional_ if md.is_cumulative_notional_set_ else 0.0
-            mkt_depth.cumulative_qty = md.cumulative_qty_ = md.cumulative_qty_ if md.is_cumulative_qty_set_ else 0
-            mkt_depth.cumulative_avg_px = md.cumulative_avg_px_ if md.is_cumulative_avg_px_set_ else 0.0
-        except Exception as e:
-            print(f'Exception: {e}')
+        # Convert C strings to Python strings
+        symbol = md.symbol_.decode() if md.symbol_ else ''
+        exch_time = md.exch_time_.decode() if md.exch_time_ else ''
+        arrival_time = md.arrival_time_.decode() if md.arrival_time_ else ''
+        side = md.side_.decode() if md.side_ else ''
+        market_maker = md.market_maker_.decode() if md.market_maker_ else ''
+
+        # Print a full snapshot of the struct
+        print("\n--- Market Depth Update ---")
+        print(f"Symbol: {symbol}")
+        print(f"Exchange Time: {exch_time}")
+        print(f"Arrival Time: {arrival_time}")
+        print(f"Side: {side}")
+        print(f"Price: {md.px_} (Set: {md.is_px_set_})")
+        print(f"Quantity: {md.qty_} (Set: {md.is_qty_set_})")
+        print(f"Position: {md.position_}")
+        print(f"Market Maker: {market_maker} (Set: {md.is_market_maker_set_})")
+        print(f"Is Smart Depth: {md.is_smart_depth_} (Set: {md.is_is_smart_depth_set_})")
+        print(f"Cumulative Notional: {md.cumulative_notional_} (Set: {md.is_cumulative_notional_set_})")
+        print(f"Cumulative Quantity: {md.cumulative_qty_} (Set: {md.is_cumulative_qty_set_})")
+        print(f"Cumulative Avg Price: {md.cumulative_avg_px_} (Set: {md.is_cumulative_avg_px_set_})")
+        print("---------------------------")
+
+        # Also update cache
+        symbol_cache = SymbolCacheContainer.get_symbol_cache(symbol)
+        mkt_depths = symbol_cache.bid_market_depth if side == 'B' else symbol_cache.ask_market_depth
+        mkt_depth = mkt_depths[md.position_]
+
+        mkt_depth.symbol = symbol
+        mkt_depth.arrival_time = convert_str_to_datetime(arrival_time) if arrival_time else None
+        mkt_depth.exch_time = convert_str_to_datetime(exch_time) if exch_time else None
+        mkt_depth.side = TickType.BID if side == 'B' else TickType.ASK
+        mkt_depth.px = md.px_
+        mkt_depth.qty = md.qty_
+        mkt_depth.position = md.position_
+        mkt_depth.market_maker = market_maker
+        mkt_depth.is_smart_depth = md.is_smart_depth_
+        mkt_depth.cumulative_notional = md.cumulative_notional_
+        mkt_depth.cumulative_qty = md.cumulative_qty_
+        mkt_depth.cumulative_avg_px = md.cumulative_avg_px_
+
     except Exception as e:
-        print(e)
+        print(f"Error in callback: {e}")
     return 0
+
 
 SymbolCacheContainer.add_symbol_cache_for_symbol("CB_Sec_1")
 a = market_depth_callback_type(market_depth_callback)
@@ -135,4 +178,4 @@ thread.start()
 
 lib.process_market_depth()
 
-time.sleep(50)
+time.sleep(5)
